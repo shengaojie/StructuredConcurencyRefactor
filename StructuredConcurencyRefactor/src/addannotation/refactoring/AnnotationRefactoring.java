@@ -56,9 +56,15 @@ import org.eclipse.ltk.core.refactoring.RefactoringStatus;
 import org.eclipse.ltk.core.refactoring.TextFileChange;
 import org.eclipse.ltk.ui.refactoring.TextEditChangeNode.ChildNode;
 import org.eclipse.text.edits.TextEdit;
-import addannotation.refactor.SourceRefactor;
-import addannotation.store.RefactorNode;
-import addannotation.utils.Visitor;
+import addannotation.DFA.ModeMatchDFA;
+import addannotation.DFA.State;
+import addannotation.modifySource.CommonSourceRefactor;
+import addannotation.modifySource.InvokeAllSourceRefactor;
+import addannotation.store.CommonRefactorNode;
+import addannotation.store.VerifyIfMatched;
+import addannotation.visitor.CommonVisitor;
+import addannotation.visitor.GeneralVisitor;
+
 
 /**
  * 此类是重构的动作类 重构的预览也是通过此类完成
@@ -138,7 +144,6 @@ public class AnnotationRefactoring extends Refactoring {
 
 	/**
 	 * iterate the project to find in all IPackageFragment
-	 * 
 	 * @param project
 	 */
 	private void findAllCompilationUnits(IJavaProject project) {
@@ -164,7 +169,6 @@ public class AnnotationRefactoring extends Refactoring {
 
 	/**
 	 * create all the changes
-	 * 
 	 * @throws JavaModelException
 	 * @throws IOException
 	 */
@@ -177,8 +181,9 @@ public class AnnotationRefactoring extends Refactoring {
 			String source = cu.getSource();
 			Document document = new Document(source);
 			CompilationUnit astRoot = createParser(cu);
-			findTargetNodes(astRoot);
-			refactorNodes(astRoot,cu,document);
+			
+			findAndRefactor(cu,document,astRoot);
+			
 		}
 		
 	}
@@ -193,36 +198,37 @@ public class AnnotationRefactoring extends Refactoring {
 		parser.setEnvironment(null, null, null, true); // setEnvironment（classpath,sourcepath,encoding,true）
 		parser.setUnitName("example.java"); // 参数随意
 		CompilationUnit astRoot = (CompilationUnit) parser.createAST(null);
+		VerifyIfMatched.astRoot = astRoot;
 		return astRoot;
 	}
 	
-	private void findTargetNodes(CompilationUnit astRoot) {
+	private void findAndRefactor(ICompilationUnit cu,Document document,CompilationUnit astRoot) {
 		ArrayList<TypeDeclaration> typeList = new ArrayList<>();
-		Visitor.getTypeDeclaration(astRoot, typeList);
+		GeneralVisitor.getTypeDeclaration(astRoot, typeList);
+		astRoot.recordModifications();
 		for(TypeDeclaration type : typeList) {
 			//找到需要修改的目标代码
 			ArrayList<MethodDeclaration> methods = new ArrayList<>();
-			Visitor.getMethodDeclaration(type, methods);
+			GeneralVisitor.getMethodDeclaration(type, methods);
 			for (MethodDeclaration method : methods) {
-				Visitor.collectTargetNode(method,astRoot);
+				VerifyIfMatched.curDeclaration = method;
+				
+				ModeMatchDFA dfa = new ModeMatchDFA(method);
+				State modeType = dfa.modeMatch();
+				if(modeType.equals(State.STATEA_ACCCPTED) || modeType.equals(State.STATEB_ACCCPTED)) {
+					dfa.refactorbyMode(modeType);
+					recordChanges(cu,document,astRoot);
+					
+				}
+				
+				
 			}
 		}
 	}
 	
 	
-	private void refactorNodes(CompilationUnit astRoot,ICompilationUnit cu,Document document) {
-		//对于目标代码进行修改
-//		ASTRewrite reWriter = ASTRewrite.create(astRoot.getAST());
-		astRoot.recordModifications();
-		
-		for(RefactorNode node : Visitor.refactorNodes) {
-			CompilationUnit root = node.getRoot();
-			SourceRefactor refactor = new SourceRefactor(root,node);
-			refactor.importRefactor();	
-			refactor.tryRefactor();
-			
-		}
-		
+	private void recordChanges(ICompilationUnit cu,Document document,CompilationUnit astRoot) {
+	
 		TextEdit edits = astRoot.rewrite(document, cu.getJavaProject().getOptions(true));
 		TextFileChange change = new TextFileChange("", (IFile) cu.getResource());
 		change.setEdit(edits);
